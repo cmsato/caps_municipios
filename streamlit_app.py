@@ -5,34 +5,52 @@ import folium
 from streamlit_folium import st_folium
 import branca.colormap as cm
 
+# Title
 st.title("Mapa de Calor por Município do Brasil - Interativo")
 
+# Path to shapefile
 shapefile_path = "data/municipios.shp"
 
-try:
-    municipios = gpd.read_file(shapefile_path)
+# Load and preprocess data
+@st.cache_data
+def load_shapefile(path):
+    municipios = gpd.read_file(path)
+    
+    # Ensure CRS is set to WGS84 (EPSG:4326)
     if municipios.crs is None:
         municipios.set_crs("EPSG:4326", inplace=True)
     elif municipios.crs != "EPSG:4326":
         municipios = municipios.to_crs("EPSG:4326")
     
-    # Simplify geometries
-    municipios['geometry'] = municipios['geometry'].simplify(0.01, preserve_topology=True)
+    return municipios
+
+try:
+    municipios = load_shapefile(shapefile_path)
 except Exception as e:
     st.error(f"Error loading shapefile: {e}")
+    st.stop()
 
+# Year slider
 selected_year = st.slider("Selecione o ano", 2014, 2023, 2023)
 
-np.random.seed(selected_year)
-municipios['valor'] = np.random.uniform(0, 100, size=len(municipios))
+# Generate random data for the selected year
+@st.cache_data
+def generate_data(data_length, seed):
+    np.random.seed(seed)
+    return np.random.uniform(0, 100, size=data_length)
 
+municipios['valor'] = generate_data(len(municipios), selected_year)
+
+# Create folium map
 m = folium.Map(location=[-14.2350, -51.9253], zoom_start=4)
 
+# Define color map
 colormap = cm.linear.OrRd_09.scale(
     municipios['valor'].min(),
     municipios['valor'].max()
 )
 
+# Add GeoJson layer with styles and tooltips
 folium.GeoJson(
     municipios,
     name="Municípios",
@@ -49,11 +67,8 @@ folium.GeoJson(
     )
 ).add_to(m)
 
+# Add colormap to map
 colormap.add_to(m)
 
-# Save map for debugging
-m.save("map_debug.html")
-
-# Display map
+# Display map in Streamlit
 st_folium(m, width=800, height=600)
-
