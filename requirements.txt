@@ -2,3 +2,7 @@ streamlit
 geopandas
 matplotlib
 numpy
+folium
+streamlit
+streamlit-folium
+branca
