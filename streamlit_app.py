@@ -120,10 +120,6 @@ def load_and_simplify_shapefile(state_code, tolerance=0.001):
         return None
 
 data_dir = Path("data")
-if not data_dir.exists():
-    st.error("Data directory not found. Please create a 'data' directory and add required files.")
-    st.stop()
-
 state_options = ["Selecione um estado"] + [f"{name} ({code})" for code, name in STATE_NAMES.items()]
 selected_state_option = st.selectbox("Selecione o estado", state_options)
 
