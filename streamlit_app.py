@@ -4,8 +4,8 @@ import numpy as np
 import folium
 from streamlit_folium import st_folium
 import branca.colormap as cm
-from shapely.geometry import Polygon, MultiPolygon
-import pandas as pd
+from pathlib import Path
+import json
 
 # Title
 st.title("Mapa de Calor por Município do Brasil - Interativo")
@@ -37,44 +37,53 @@ STATE_NAMES = {
 }
 
 @st.cache_data
-def generate_dummy_municipalities(state_code):
-    """Generate dummy municipality polygons for a given state."""
-    center_lat, center_lon = STATE_COORDINATES[state_code]
-    
-    # Generate random number of municipalities (between 20 and 50)
-    n_municipalities = np.random.randint(20, 50)
-    
-    municipalities = []
-    # Generate unique municipality names
-    municipality_names = [f"Município {i+1} - {state_code}" for i in range(n_municipalities)]
-    
-    for i in range(n_municipalities):
-        # Generate a random point near the state center
-        center_point_lat = center_lat + np.random.uniform(-1, 1)
-        center_point_lon = center_lon + np.random.uniform(-1, 1)
+def load_and_simplify_shapefile(state_code, tolerance=0.001):
+    """Load shapefile for a specific state and simplify geometries."""
+    try:
+        file_path = Path(f"data/{state_code}.shp")
         
-        # Create a polygon (hexagon) around this point
-        size = 0.1  # Size of the polygon
-        angles = np.linspace(0, 360, 7)[:-1]  # 6 points for hexagon
-        polygon_points = []
+        if not file_path.exists():
+            st.error(f"Shapefile for {STATE_NAMES[state_code]} ({state_code}) not found at {file_path}")
+            return None
         
-        for angle in angles:
-            dx = size * np.cos(np.radians(angle))
-            dy = size * np.sin(np.radians(angle))
-            polygon_points.append((center_point_lon + dx, center_point_lat + dy))
+        # Load the shapefile
+        gdf = gpd.read_file(file_path, encoding='utf-8')
         
-        # Close the polygon
-        polygon_points.append(polygon_points[0])
+        # Ensure CRS is set to WGS84
+        if gdf.crs is None:
+            gdf.set_crs("EPSG:4326", inplace=True)
+        elif gdf.crs != "EPSG:4326":
+            gdf = gdf.to_crs("EPSG:4326")
         
-        municipalities.append({
-            'NM_MUN': municipality_names[i],
-            'UF': state_code,
-            'geometry': Polygon(polygon_points)
-        })
+        # Simplify geometries
+        gdf['geometry'] = gdf['geometry'].simplify(tolerance=tolerance, preserve_topology=True)
+        
+        # Add state code if not present
+        if 'UF' not in gdf.columns:
+            gdf['UF'] = state_code
+            
+        return gdf
+        
+    except Exception as e:
+        st.error(f"Error loading shapefile for {STATE_NAMES[state_code]} ({state_code}): {str(e)}")
+        return None
+
+@st.cache_data
+def prepare_geojson(_gdf, values):
+    """Prepare GeoJSON with only necessary properties."""
+    if 'NM_MUN' not in _gdf.columns:
+        _gdf['NM_MUN'] = [f"Municipality {i+1}" for i in range(len(_gdf))]
     
-    # Create GeoDataFrame
-    gdf = gpd.GeoDataFrame(municipalities, crs="EPSG:4326")
-    return gdf
+    simple_gdf = _gdf[['geometry', 'NM_MUN']].copy()
+    simple_gdf['valor'] = values
+    
+    return json.loads(simple_gdf.to_json())
+
+# Check if data directory exists
+data_dir = Path("data")
+if not data_dir.exists():
+    st.error("Data directory not found. Please create a 'data' directory and add state shapefiles.")
+    st.stop()
 
 # Create state selection dropdown
 state_options = ["Selecione um estado"] + [f"{name} ({code})" for code, name in STATE_NAMES.items()]
@@ -82,51 +91,55 @@ selected_state_option = st.selectbox("Selecione o estado", state_options)
 
 # Only proceed if a state is selected
 if selected_state_option != "Selecione um estado":
-    selected_state_code = selected_state_option[-3:-1]  # Extract state code from option
+    selected_state_code = selected_state_option[-3:-1]
     
-    # Generate dummy data for selected state
-    state_data = generate_dummy_municipalities(selected_state_code)
+    # Load state data with simplified geometries
+    state_data = load_and_simplify_shapefile(selected_state_code)
     
-    # Year slider
-    selected_year = st.slider("Selecione o ano", 2014, 2023, 2023)
-    
-    # Generate random values for the selected year
-    @st.cache_data
-    def generate_data(data_length, seed):
-        np.random.seed(seed)
-        return np.random.uniform(0, 100, size=data_length)
-    
-    state_data['valor'] = generate_data(len(state_data), selected_year)
-    
-    # Create folium map centered on the selected state
-    state_center = STATE_COORDINATES[selected_state_code]
-    m = folium.Map(location=state_center, zoom_start=7)
-    
-    # Define color map
-    colormap = cm.linear.OrRd_09.scale(
-        state_data['valor'].min(),
-        state_data['valor'].max()
-    )
-    
-    # Add GeoJson layer with styles and tooltips
-    folium.GeoJson(
-        state_data,
-        name="Municípios",
-        style_function=lambda x: {
-            'fillColor': colormap(x['properties']['valor']),
-            'color': 'black',
-            'weight': 0.5,
-            'fillOpacity': 0.7,
-        },
-        tooltip=folium.features.GeoJsonTooltip(
-            fields=['NM_MUN', 'valor'],
-            aliases=['Município:', "Valor:"],
-            localize=True,
+    if state_data is not None:
+        # Year slider
+        selected_year = st.slider("Selecione o ano", 2014, 2023, 2023)
+        
+        # Generate random values
+        @st.cache_data
+        def generate_data(data_length, seed):
+            np.random.seed(seed)
+            return np.random.uniform(0, 100, size=data_length)
+        
+        values = generate_data(len(state_data), selected_year)
+        
+        # Prepare optimized GeoJSON
+        geojson_data = prepare_geojson(state_data, values)
+        
+        # Create folium map
+        state_center = STATE_COORDINATES[selected_state_code]
+        m = folium.Map(location=state_center, zoom_start=7)
+        
+        # Define color map
+        colormap = cm.linear.OrRd_09.scale(
+            min(values),
+            max(values)
         )
-    ).add_to(m)
-    
-    # Add colormap to map
-    colormap.add_to(m)
-    
-    # Display map in Streamlit
-    st_folium(m, width=800, height=600)
+        
+        # Add GeoJson layer with reduced data
+        folium.GeoJson(
+            geojson_data,
+            name="Municípios",
+            style_function=lambda x: {
+                'fillColor': colormap(x['properties']['valor']),
+                'color': 'black',
+                'weight': 0.5,
+                'fillOpacity': 0.7,
+            },
+            tooltip=folium.features.GeoJsonTooltip(
+                fields=['NM_MUN', 'valor'],
+                aliases=['Município:', "Valor:"],
+                localize=True,
+            )
+        ).add_to(m)
+        
+        # Add colormap to map
+        colormap.add_to(m)
+        
+        # Display map
+        st_folium(m, width=800, height=600)
