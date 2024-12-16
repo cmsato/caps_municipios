@@ -10,8 +10,11 @@ import json
 
 st.title("Encaminhamento CAPS")
 
+# Initialize session state for map and year
 if 'map_state' not in st.session_state:
     st.session_state.map_state = {}
+if 'last_year' not in st.session_state:
+    st.session_state.last_year = None
 
 STATE_COORDINATES = {
     'AC': [-8.77, -70.55], 'AL': [-9.71, -35.73], 'AP': [0.90, -52.00],
@@ -137,7 +140,12 @@ if selected_state_option != "Selecione um estado":
     qlb_data = load_qlb_data(selected_state_code)
     
     if state_data is not None and caps_data is not None:
-        selected_year = st.slider("Selecione o ano", 2014, 2023, 2023)
+        # Create columns for layout
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            selected_year = st.slider("Selecione o ano", 2014, 2023, 2023)
+        
         pop_year = get_closest_population_year(selected_year)
         pop_data = load_population_data(pop_year)
         
@@ -146,10 +154,7 @@ if selected_state_option != "Selecione um estado":
             
             values = [f['properties']['valor'] for f in geojson_data['features'] if f['properties']['valor'] > 0]
             if values:
-                log_values = np.log1p(values)
-                min_value = min(log_values)
-                max_value = max(log_values)
-                
+                # Create colormap for style function
                 colormap = cm.LinearColormap(
                     colors=[
                         '#fff5f5', '#ffe6e6', '#ffd6d6', '#ffc7c7', 
@@ -158,53 +163,97 @@ if selected_state_option != "Selecione um estado":
                         '#ff3f3f', '#ff3030', '#ff2121', '#ff1212',
                         '#ff0303'
                     ],
-                    vmin=min_value,
-                    vmax=max_value
+                    vmin=0,
+                    vmax=max(values)
                 )
                 
-                style_function = lambda x: {
-                    'fillColor': colormap(np.log1p(x['properties']['valor'])) if x['properties']['valor'] > 0 else '#ffffff',
-                    'color': 'black',
-                    'weight': 0.5,
-                    'fillOpacity': 0.7,
-                }
+                # Create main layout columns
+                map_col, colorbar_col = st.columns([5, 1])
                 
-                current_state = st.session_state.map_state[selected_state_code]
-                m = folium.Map(
-                    location=current_state['center'],
-                    zoom_start=current_state['zoom']
-                )
-                
-                folium.GeoJson(
-                    geojson_data,
-                    style_function=style_function,
-                    tooltip=folium.features.GeoJsonTooltip(
-                        fields=['NM_MUN', 'valor'],
-                        aliases=['Município:', "Taxa por 100.000:"],
-                        localize=True
+                with map_col:
+                    style_function = lambda x: {
+                        'fillColor': colormap(x['properties']['valor']) if x['properties']['valor'] > 0 else '#ffffff',
+                        'color': 'black',
+                        'weight': 0.5,
+                        'fillOpacity': 0.7,
+                    }
+                    
+                    current_center = st.session_state.map_state[selected_state_code]['center']
+                    current_zoom = st.session_state.map_state[selected_state_code]['zoom']
+                    
+                    m = folium.Map(
+                        location=current_center,
+                        zoom_start=current_zoom,
+                        scrollWheelZoom=True,
+                        tiles='cartodbpositron'
                     )
-                ).add_to(m)
+                    
+                    folium.GeoJson(
+                        geojson_data,
+                        style_function=style_function,
+                        tooltip=folium.features.GeoJsonTooltip(
+                            fields=['NM_MUN', 'valor'],
+                            aliases=['Município:', "Taxa por 100.000:"],
+                            localize=True
+                        )
+                    ).add_to(m)
+                    
+                    if qlb_data is not None:
+                        for _, row in qlb_data.iterrows():
+                            folium.CircleMarker(
+                                location=[row['Lat_d'], row['Long_d']],
+                                radius=3,
+                                color='black',
+                                weight=1,
+                                fill=True,
+                                popup=row['NM_CQ'],
+                            ).add_to(m)
+                    
+                    # Display the map
+                    map_data = st_folium(
+                        m,
+                        width=700,
+                        height=600,
+                        key=f"{selected_state_code}_{selected_year}",
+                        returned_objects=["last_active_drawing"]
+                    )
+                    
+                    # Update state only if map was interacted with
+                    if map_data["last_active_drawing"] is not None:
+                        last_pos = map_data["last_active_drawing"]
+                        if 'center' in last_pos:
+                            st.session_state.map_state[selected_state_code] = {
+                                'center': [last_pos['center']['lat'], last_pos['center']['lng']],
+                                'zoom': last_pos['zoom']
+                            }
                 
-                if qlb_data is not None:
-                    for _, row in qlb_data.iterrows():
-                        folium.CircleMarker(
-                            location=[row['Lat_d'], row['Long_d']],
-                            radius=5,
-                            color='black',
-                            fill=True,
-                            popup=row['NM_CQ'],
-                        ).add_to(m)
-                
-                colormap.add_to(m)
-                
-                map_data = st_folium(m, width=800, height=600)
-                
-                if map_data['last_active_drawing'] is not None:
-                    last_pos = map_data['last_active_drawing']
-                    if 'center' in last_pos:
-                        st.session_state.map_state[selected_state_code]['center'] = [
-                            last_pos['center']['lat'],
-                            last_pos['center']['lng']
-                        ]
-                    if 'zoom' in last_pos:
-                        st.session_state.map_state[selected_state_code]['zoom'] = last_pos['zoom']
+                with colorbar_col:
+                    st.markdown("""
+    <div style="background-color: white; padding: 10px; border: 2px solid rgba(0,0,0,0.2); 
+            border-radius: 4px; margin: 10px 0; height: 600px;">
+        <div style="text-align: center; font-weight: bold; margin-bottom: 15px;">
+            Taxa por 100.000 habitantes
+        </div>
+        <div style="text-align: center; margin-bottom: 5px;">
+            <span style="font-size: 0.9em;">0</span>
+        </div>
+        <div style="height: 450px; margin: 10px 0; display: flex; flex-direction: column;">
+            <div style="flex-grow: 1; width: 30px; margin: 0 auto; background: linear-gradient(to bottom, 
+                #ffe6e6, #ffd6d6, #ffc7c7, #ffb8b8,
+                #ffa8a8, #ff9999, #ff8a8a, #ff7b7b,
+                #ff6c6c, #ff5d5d, #ff4e4e, #ff3f3f,
+                #ff3030, #ff2121, #ff1212, #ff0303);">
+            </div>
+        </div>
+        <div style="text-align: center; margin-top: 5px;">
+            <span style="font-size: 0.9em;">{}</span>
+        </div>
+    </div>
+""".format(int(max(values))), unsafe_allow_html=True)
+st.markdown('''
+<div style="text-align: center">
+    Fonte de dados:<br>
+    <a href="https://sisab.saude.gov.br/">Sistema de Informação em Saúde para a Atenção Básica (SISAB)</a><br>
+    <a href="https://www.ibge.gov.br/">Instituto Brasileiro de Geografia e Estatística (IBGE)</a>
+</div>
+''', unsafe_allow_html=True)
