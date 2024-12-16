@@ -9,6 +9,8 @@ from pathlib import Path
 import json
 
 st.title("Encaminhamento CAPS")
+if 'show_qlb' not in st.session_state:
+    st.session_state.show_qlb = True
 
 # Initialize session state for map and year
 if 'map_state' not in st.session_state:
@@ -171,6 +173,9 @@ if selected_state_option != "Selecione um estado":
                 map_col, colorbar_col = st.columns([5, 1])
                 
                 with map_col:
+                    # Add the toggle button before creating the map
+                    st.session_state.show_qlb = st.toggle('Mostrar comunidades quilombolas', value=st.session_state.show_qlb)
+                    
                     style_function = lambda x: {
                         'fillColor': colormap(x['properties']['valor']) if x['properties']['valor'] > 0 else '#ffffff',
                         'color': 'black',
@@ -198,7 +203,8 @@ if selected_state_option != "Selecione um estado":
                         )
                     ).add_to(m)
                     
-                    if qlb_data is not None:
+                    # Modified QLB data section with toggle condition
+                    if qlb_data is not None and st.session_state.show_qlb:
                         for _, row in qlb_data.iterrows():
                             folium.CircleMarker(
                                 location=[row['Lat_d'], row['Long_d']],
@@ -208,7 +214,7 @@ if selected_state_option != "Selecione um estado":
                                 fill=True,
                                 popup=row['NM_CQ'],
                             ).add_to(m)
-                    
+
                     # Display the map
                     map_data = st_folium(
                         m,
